@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jlandersen/go-skoda/internal/skoda"
+	skoda "github.com/jlandersen/go-skoda"
 )
 
 const tokenFile = ".go-skoda-token"
