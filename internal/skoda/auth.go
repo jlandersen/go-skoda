@@ -147,7 +147,8 @@ func sanitizeURL(raw string) string {
 }
 
 // The VW identity provider embeds CSRF state in a <script> tag as:
-//   window._IDK = { csrf_token: "...", templateModel: { hmac: "...", relayState: "..." } }
+//
+//	window._IDK = { csrf_token: "...", templateModel: { hmac: "...", relayState: "..." } }
 var (
 	csrfRegex       = regexp.MustCompile(`csrf_token:\s*['"]([^'"]+)['"]`)
 	relayStateRegex = regexp.MustCompile(`"relayState"\s*:\s*"([^"]+)"`)
@@ -183,12 +184,12 @@ func (c *Client) oidcAuthorize(ctx context.Context, httpClient *http.Client, cha
 	params := url.Values{
 		"client_id":             {ClientID},
 		"nonce":                 {generateNonce(16)},
-		"redirect_uri":         {RedirectURI},
-		"response_type":        {"code"},
-		"scope":                {"address badge birthdate cars driversLicense dealers email mileage mbb nationalIdentifier openid phone profession profile vin"},
-		"code_challenge":       {challenge},
+		"redirect_uri":          {RedirectURI},
+		"response_type":         {"code"},
+		"scope":                 {"address badge birthdate cars driversLicense dealers email mileage mbb nationalIdentifier openid phone profession profile vin"},
+		"code_challenge":        {challenge},
 		"code_challenge_method": {"s256"},
-		"prompt":               {"login"},
+		"prompt":                {"login"},
 	}
 
 	authorizeURL := IdentBaseURL + "/oidc/v1/authorize?" + params.Encode()
