@@ -1,6 +1,6 @@
 # go-skoda
 
-A Go package for interacting with the Skoda Connect API. Provides both a Go client library and a CLI tool for querying vehicle data.
+A Go package for interacting with the Skoda Connect API. Provides both a Go client library and a CLI tool for querying vehicle data. Zero dependencies.
 
 Inspired by [myskoda](https://github.com/skodaconnect/myskoda) (Python).
 
@@ -22,7 +22,7 @@ Inspired by [myskoda](https://github.com/skodaconnect/myskoda) (Python).
 ## Installation
 
 ```
-go install github.com/jlandersen/go-skoda/cmd/cli@latest
+go install github.com/jlandersen/go-skoda@latest
 ```
 
 ## Library Usage
