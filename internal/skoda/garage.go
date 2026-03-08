@@ -7,12 +7,14 @@ import (
 
 // GarageEntry represents a single vehicle in the user's garage.
 type GarageEntry struct {
-	VIN            string `json:"vin"`
-	Name           string `json:"name"`
-	State          string `json:"state"`
-	Title          string `json:"title"`
-	DevicePlatform string `json:"devicePlatform"`
-	SystemModelID  string `json:"systemModelId"`
+	VIN              string            `json:"vin"`
+	Name             string            `json:"name"`
+	State            string            `json:"state"`
+	Title            string            `json:"title"`
+	DevicePlatform   string            `json:"devicePlatform"`
+	SystemModelID    string            `json:"systemModelId"`
+	Renders          []Render          `json:"renders"`
+	CompositeRenders []CompositeRender `json:"compositeRenders"`
 }
 
 type garageResponse struct {

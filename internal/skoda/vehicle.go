@@ -5,6 +5,40 @@ import (
 	"fmt"
 )
 
+// RenderType describes how the vehicle image was generated.
+type RenderType string
+
+const (
+	RenderTypeReal RenderType = "REAL"
+)
+
+// ViewType identifies the type of composite render.
+type ViewType string
+
+const (
+	ViewTypeUnmodifiedExteriorSide  ViewType = "UNMODIFIED_EXTERIOR_SIDE"
+	ViewTypeUnmodifiedExteriorFront ViewType = "UNMODIFIED_EXTERIOR_FRONT"
+	ViewTypeHome                    ViewType = "HOME"
+	ViewTypeChargingLight           ViewType = "CHARGING_LIGHT"
+	ViewTypeChargingDark            ViewType = "CHARGING_DARK"
+	ViewTypePluggedInDark           ViewType = "PLUGGED_IN_DARK"
+	ViewTypePluggedInLight          ViewType = "PLUGGED_IN_LIGHT"
+)
+
+// Render is a single vehicle image with a URL and viewpoint.
+type Render struct {
+	URL       string     `json:"url"`
+	Type      RenderType `json:"type"`
+	Order     int        `json:"order"`
+	ViewPoint string     `json:"viewPoint"`
+}
+
+// CompositeRender is a set of layered renders for a specific view type.
+type CompositeRender struct {
+	ViewType ViewType `json:"viewType"`
+	Layers   []Render `json:"layers"`
+}
+
 // CapabilityID identifies a vehicle capability.
 type CapabilityID string
 
@@ -83,15 +117,17 @@ type Capabilities struct {
 
 // VehicleInfo contains detailed information about a specific vehicle.
 type VehicleInfo struct {
-	VIN                 string        `json:"vin"`
-	Name                string        `json:"name"`
-	State               string        `json:"state"`
-	Specification       Specification `json:"specification"`
-	Capabilities        Capabilities  `json:"capabilities"`
-	DevicePlatform      string        `json:"devicePlatform"`
-	WorkshopModeEnabled bool          `json:"workshopModeEnabled"`
-	SoftwareVersion     string        `json:"softwareVersion,omitempty"`
-	LicensePlate        string        `json:"licensePlate,omitempty"`
+	VIN                 string            `json:"vin"`
+	Name                string            `json:"name"`
+	State               string            `json:"state"`
+	Specification       Specification     `json:"specification"`
+	Capabilities        Capabilities      `json:"capabilities"`
+	Renders             []Render          `json:"renders"`
+	CompositeRenders    []CompositeRender `json:"compositeRenders"`
+	DevicePlatform      string            `json:"devicePlatform"`
+	WorkshopModeEnabled bool              `json:"workshopModeEnabled"`
+	SoftwareVersion     string            `json:"softwareVersion,omitempty"`
+	LicensePlate        string            `json:"licensePlate,omitempty"`
 }
 
 // HasCapability checks whether the vehicle has a given capability,
@@ -114,6 +150,26 @@ func (v *VehicleInfo) IsCapabilityAvailable(id CapabilityID) bool {
 		}
 	}
 	return false
+}
+
+// RenderByViewPoint returns the first render matching the given viewpoint, or nil.
+func (v *VehicleInfo) RenderByViewPoint(viewPoint string) *Render {
+	for _, r := range v.Renders {
+		if r.ViewPoint == viewPoint {
+			return &r
+		}
+	}
+	return nil
+}
+
+// CompositeRenderByViewType returns the first composite render matching the given view type, or nil.
+func (v *VehicleInfo) CompositeRenderByViewType(viewType ViewType) *CompositeRender {
+	for _, cr := range v.CompositeRenders {
+		if cr.ViewType == viewType {
+			return &cr
+		}
+	}
+	return nil
 }
 
 // VehicleInfo retrieves detailed information for a vehicle by VIN,
