@@ -34,7 +34,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jlandersen/go-skoda/internal/skoda"
+	skoda "github.com/jlandersen/go-skoda"
 )
 
 func main() {
