@@ -1,0 +1,10 @@
+package: api
+output: internal/api/models.gen.go
+generate:
+  models: true
+output-options:
+  include-operation-ids:
+    - getVehicle
+  overlay:
+    path: api/overlay.yaml
+    strict: true

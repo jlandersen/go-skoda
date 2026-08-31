@@ -5,13 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	skoda "github.com/jlandersen/go-skoda"
 )
-
-const tokenFile = ".go-skoda-token"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -19,153 +16,81 @@ func main() {
 		os.Exit(1)
 	}
 
-	cmd := os.Args[1]
+	command := os.Args[1]
 	args := os.Args[2:]
 
-	switch cmd {
-	case "login":
-		cmdLogin(args)
-	case "garage":
-		cmdGarage()
-	case "info":
-		cmdInfo(args)
+	switch command {
+	case "vehicle", "info":
+		cmdVehicle(args)
 	case "charging":
 		cmdCharging(args)
 	case "ac":
-		cmdAC(args)
+		cmdAirConditioning(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", cmd)
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", command)
 		printUsage()
 		os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `Usage: go-skoda <command> [arguments]
+	fmt.Fprint(os.Stderr, `Usage: go-skoda <command> [arguments]
 
 Commands:
-  login  -email=EMAIL -password=PASSWORD   Authenticate and store refresh token
-  garage                                   List vehicles
-  info   -vin=VIN                          Show vehicle details
-  charging -vin=VIN                        Show charging status
-  ac     -vin=VIN                          Show air conditioning status
+  vehicle -vin=VIN             Show all available vehicle data
+  charging -vin=VIN            Show charging status
+  ac -vin=VIN                  Show air-conditioning status
 
 Environment variables:
-  SKODA_EMAIL          Email for login
-  SKODA_PASSWORD       Password for login
-  SKODA_VIN            Default VIN (used when -vin is not provided)
-  SKODA_REFRESH_TOKEN  Refresh token (overrides stored token)
+  SKODA_API_KEY                API key created in the MySkoda app
+  SKODA_VIN                    Default VIN (used when -vin is not provided)
 `)
 }
 
-func cmdLogin(args []string) {
-	email := envOrFlag(args, "email", "SKODA_EMAIL")
-	password := envOrFlag(args, "password", "SKODA_PASSWORD")
-
-	if email == "" || password == "" {
-		fatal("email and password required (use -email/-password flags or SKODA_EMAIL/SKODA_PASSWORD env vars)")
-	}
-
-	client := skoda.NewClient()
-	ctx := context.Background()
-
-	fmt.Fprintf(os.Stderr, "Logging in as %s...\n", email)
-	if err := client.Login(ctx, email, password); err != nil {
-		fatal("login failed: %v", err)
-	}
-
-	token, err := client.GetRefreshToken()
+func cmdVehicle(args []string) {
+	client, vin := clientAndVIN(args)
+	vehicle, err := client.Vehicle(context.Background(), vin)
 	if err != nil {
-		fatal("getting refresh token: %v", err)
+		fatal("vehicle: %v", err)
 	}
-
-	if err := saveToken(token); err != nil {
-		fatal("saving token: %v", err)
-	}
-
-	fmt.Fprintf(os.Stderr, "Logged in. Refresh token saved to ~/%s\n", tokenFile)
-}
-
-func cmdGarage() {
-	client := authedClient()
-
-	vehicles, err := client.Garage(context.Background())
-	if err != nil {
-		fatal("garage: %v", err)
-	}
-
-	printJSON(vehicles)
-}
-
-func cmdInfo(args []string) {
-	vin := requireVIN(args)
-	client := authedClient()
-
-	info, err := client.VehicleInfo(context.Background(), vin)
-	if err != nil {
-		fatal("info: %v", err)
-	}
-
-	printJSON(info)
+	printJSON(vehicle)
 }
 
 func cmdCharging(args []string) {
-	vin := requireVIN(args)
-	client := authedClient()
-
+	client, vin := clientAndVIN(args)
 	charging, err := client.Charging(context.Background(), vin)
 	if err != nil {
 		fatal("charging: %v", err)
 	}
-
 	printJSON(charging)
 }
 
-func cmdAC(args []string) {
-	vin := requireVIN(args)
-	client := authedClient()
-
-	ac, err := client.AirConditioning(context.Background(), vin)
+func cmdAirConditioning(args []string) {
+	client, vin := clientAndVIN(args)
+	airConditioning, err := client.AirConditioning(context.Background(), vin)
 	if err != nil {
-		fatal("ac: %v", err)
+		fatal("air conditioning: %v", err)
 	}
-
-	printJSON(ac)
+	printJSON(airConditioning)
 }
 
-func authedClient() *skoda.Client {
-	client := skoda.NewClient()
-	ctx := context.Background()
-
-	token := os.Getenv("SKODA_REFRESH_TOKEN")
-	if token == "" {
-		var err error
-		token, err = loadToken()
-		if err != nil {
-			fatal("not authenticated. Run 'go-skoda login' first or set SKODA_REFRESH_TOKEN")
-		}
+func clientAndVIN(args []string) (*skoda.Client, string) {
+	apiKey := strings.TrimSpace(os.Getenv("SKODA_API_KEY"))
+	if apiKey == "" {
+		fatal("SKODA_API_KEY is required; create a key in the MySkoda app")
 	}
 
-	if err := client.LoginWithRefreshToken(ctx, token); err != nil {
-		fatal("authentication failed: %v", err)
-	}
-
-	// Save the new refresh token
-	if newToken, err := client.GetRefreshToken(); err == nil {
-		saveToken(newToken)
-	}
-
-	return client
-}
-
-func requireVIN(args []string) string {
 	vin := envOrFlag(args, "vin", "SKODA_VIN")
 	if vin == "" {
-		fatal("VIN required (use -vin flag or SKODA_VIN env var)")
+		fatal("VIN required (use -vin or SKODA_VIN)")
 	}
-	return vin
+	client, err := skoda.NewClient(apiKey)
+	if err != nil {
+		fatal("client: %v", err)
+	}
+	return client, vin
 }
 
 func envOrFlag(args []string, flagName, envName string) string {
@@ -178,33 +103,15 @@ func envOrFlag(args []string, flagName, envName string) string {
 	return os.Getenv(envName)
 }
 
-func tokenPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return tokenFile
+func printJSON(value any) {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		fatal("encoding output: %v", err)
 	}
-	return filepath.Join(home, tokenFile)
-}
-
-func saveToken(token string) error {
-	return os.WriteFile(tokenPath(), []byte(token), 0600)
-}
-
-func loadToken() (string, error) {
-	data, err := os.ReadFile(tokenPath())
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-
-func printJSON(v any) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	enc.Encode(v)
 }
 
 func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
 }

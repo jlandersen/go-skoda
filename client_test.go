@@ -2,292 +2,438 @@ package skoda
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
+const testVIN = "TMBJB9NY6RF123456"
+
 func newTestClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
 	t.Helper()
-	server := httptest.NewServer(handler)
-
-	client := NewClient()
-	client.apiURL = server.URL
-	client.baseURL = server.URL
-	client.tokens = &IDKSession{
-		AccessToken:  "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjk5OTk5OTk5OTl9.",
-		RefreshToken: "fake-refresh-token",
-		IDToken:      "fake-id-token",
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		handler(w, r)
+	}))
+	client, err := NewClient("test-api-key", WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	if err != nil {
+		server.Close()
+		t.Fatalf("NewClient() error = %v", err)
 	}
-
 	return client, server
 }
 
-func TestGarage(t *testing.T) {
+func TestVehicle(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "/v2/garage") {
-			t.Errorf("unexpected path: %s", r.URL.Path)
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
 		}
-		if r.Header.Get("Authorization") == "" {
-			t.Error("missing Authorization header")
+		if r.URL.Path != "/api/v1/vehicles/"+testVIN {
+			t.Errorf("path = %s, want /api/v1/vehicles/%s", r.URL.Path, testVIN)
 		}
-
-		json.NewEncoder(w).Encode(garageResponse{
-			Vehicles: []GarageEntry{
-				{VIN: "TMBJB9NY6RF123456", Name: "My Enyaq", State: "ACTIVATED", Title: "ENYAQ iV 80"},
-			},
-		})
-	})
-	defer server.Close()
-
-	vehicles, err := client.Garage(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(vehicles) != 1 {
-		t.Fatalf("expected 1 vehicle, got %d", len(vehicles))
-	}
-	if vehicles[0].VIN != "TMBJB9NY6RF123456" {
-		t.Errorf("expected VIN TMBJB9NY6RF123456, got %s", vehicles[0].VIN)
-	}
-}
-
-func TestVehicleInfo(t *testing.T) {
-	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "/v2/garage/vehicles/") {
-			t.Errorf("unexpected path: %s", r.URL.Path)
+		if got := r.URL.Query().Get("include"); got != "info,status,fuelStatus,odometer,parkingPosition,airConditioning,auxiliaryHeating,activeVentilation,charging,chargingProfiles" {
+			t.Errorf("include = %q", got)
+		}
+		if got := r.Header.Get("X-API-Key"); got != "test-api-key" {
+			t.Errorf("X-API-Key = %q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q, want empty", got)
 		}
 
-		json.NewEncoder(w).Encode(VehicleInfo{
-			VIN:   "TMBJB9NY6RF123456",
-			Name:  "My Enyaq",
-			State: "ACTIVATED",
-			Specification: Specification{
-				Title:     "ENYAQ iV 80",
-				Model:     "ENYAQ",
-				ModelYear: "2024",
-				Body:      "SUV",
-				Engine:    Engine{Type: "electric", PowerInKW: 150},
-				Battery:   &Battery{CapacityInKWh: 77},
-			},
-			Capabilities: Capabilities{
-				Capabilities: []Capability{
-					{ID: CapabilityCharging, Statuses: []string{}},
-					{ID: CapabilityAirConditioning, Statuses: []string{}},
-					{ID: CapabilityVehicleHealthWarningsWakeUp, Statuses: []string{}},
+		w.Header().Set("X-API-Key-Expires-At", "2026-09-30T00:00:00Z")
+		w.Header().Set("RateLimit-Limit", "20")
+		w.Header().Set("RateLimit-Remaining", "19")
+		w.Header().Set("RateLimit-Reset", "3600")
+		_, err := w.Write([]byte(`{
+			"vehicle": {
+				"vin": "TMBJB9NY6RF123456",
+				"name": "My Enyaq",
+				"licensePlate": "AB 12345",
+				"status": {
+					"overall": {"doorsLocked":"YES","locked":"YES","doors":"CLOSED","windows":"CLOSED","lights":"OFF","reliableLockStatus":"LOCKED"},
+					"detail": {"sunroof":"CLOSED","trunk":"CLOSED","bonnet":"CLOSED"},
+					"carCapturedTimestamp": "2026-08-31T12:00:00Z"
 				},
-			},
-		})
-	})
-	defer server.Close()
-
-	info, err := client.VehicleInfo(context.Background(), "TMBJB9NY6RF123456")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if info.VIN != "TMBJB9NY6RF123456" {
-		t.Errorf("expected VIN TMBJB9NY6RF123456, got %s", info.VIN)
-	}
-	if !info.HasCapability(CapabilityCharging) {
-		t.Error("expected vehicle to have CHARGING capability")
-	}
-	if !info.IsCapabilityAvailable(CapabilityAirConditioning) {
-		t.Error("expected AIR_CONDITIONING to be available")
-	}
-	if info.HasCapability(CapabilityHonkAndFlash) {
-		t.Error("expected vehicle to NOT have HONK_AND_FLASH capability")
-	}
-	if info.Specification.Battery == nil {
-		t.Fatal("expected battery to be present")
-	}
-	if info.Specification.Battery.CapacityInKWh != 77 {
-		t.Errorf("expected battery capacity 77, got %d", info.Specification.Battery.CapacityInKWh)
-	}
-}
-
-func TestCharging(t *testing.T) {
-	soc := 75
-	rangeMeters := int64(310000)
-	power := 11.0
-	rate := 38.5
-	remaining := int64(120)
-
-	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(Charging{
-			IsVehicleInSavedLocation: true,
-			Status: &ChargingStatus{
-				Battery: ChargingBattery{
-					StateOfChargeInPercent:         &soc,
-					RemainingCruisingRangeInMeters: &rangeMeters,
+				"charging": {
+					"isVehicleInSavedLocation": true,
+					"status": {
+						"state": "CHARGING",
+						"chargeType": "AC",
+						"chargePowerInKw": 11,
+						"remainingTimeToFullyChargedInMinutes": 90,
+						"fullyChargedAt": "2026-08-31T13:30:00Z",
+						"battery": {"stateOfChargeInPercent":75,"remainingCruisingRangeInMeters":310000}
+					},
+					"settings": {"targetStateOfChargeInPercent":80,"maxChargeCurrentAc":"MAXIMUM","maxChargeCurrentAcAmpere":32}
 				},
-				State:                                ChargingStateCharging,
-				ChargePowerInKW:                      &power,
-				ChargingRateInKilometersPerHour:      &rate,
-				ChargeType:                           ChargeTypeAC,
-				RemainingTimeToFullyChargedInMinutes: &remaining,
+				"airConditioning": {
+					"state": "OFF",
+					"targetTemperature": {"value":21.5,"unit":"CELSIUS"},
+					"airConditioningWithoutExternalPower": true,
+					"windowHeating": {"enabled":false,"front":"OFF","rear":"OFF"}
+				},
+				"fuelStatus": {
+					"carType":"HYBRID",
+					"totalRangeInKm":520,
+					"primaryEngineRange":{"engineType":"GASOLINE","currentFuelLevelInPercent":87,"remainingRangeInKm":350}
+				},
+				"odometer":{"mileageInKm":12753},
+				"parkingPosition":{"state":"PARKED","gpsCoordinates":{"latitude":37.4224428,"longitude":-122.0842467},"formattedAddress":"Prazska 4A"},
+				"auxiliaryHeating":{"state":"OFF","startMode":"HEATING","durationInSeconds":600},
+				"activeVentilation":{"state":"OFF","durationInSeconds":300},
+				"chargingProfiles": {
+					"profiles":[{
+						"id":123456,
+						"name":"Home",
+						"settings":{"maxChargingCurrent":"MAXIMUM","minBatteryStateOfCharge":{"enabled":true,"minimumBatteryStateOfChargeInPercent":20}},
+						"preferredChargingTimes":[{"id":1,"enabled":true,"startTime":"22:00","endTime":"06:00"}],
+						"timers":[{"id":2,"enabled":true,"time":"07:30","type":"RECURRING","recurringOn":["MONDAY","FRIDAY"]}]
+					}],
+					"currentVehiclePositionProfile":{"id":123456,"name":"Home","targetStateOfChargeInPercent":80,"nextChargingTime":"22:00"}
+				}
 			},
-		})
+			"errors": [{"type":"RENDER_UNAVAILABLE","description":"The render could not be retrieved."}]
+		}`))
+		if err != nil {
+			t.Errorf("writing response: %v", err)
+		}
 	})
 	defer server.Close()
 
-	charging, err := client.Charging(context.Background(), "TMBJB9NY6RF123456")
+	response, err := client.Vehicle(
+		context.Background(),
+		testVIN,
+		IncludeInfo,
+		IncludeStatus,
+		IncludeFuelStatus,
+		IncludeOdometer,
+		IncludeParkingPosition,
+		IncludeAirConditioning,
+		IncludeAuxiliaryHeating,
+		IncludeActiveVentilation,
+		IncludeCharging,
+		IncludeChargingProfiles,
+	)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("Vehicle() error = %v", err)
 	}
-	if charging.Status == nil {
-		t.Fatal("expected charging status to be present")
+	if response.Vehicle.Name == nil || *response.Vehicle.Name != "My Enyaq" {
+		t.Errorf("name = %v", response.Vehicle.Name)
 	}
-	if charging.Status.State != ChargingStateCharging {
-		t.Errorf("expected state CHARGING, got %s", charging.Status.State)
+	if response.Vehicle.Status == nil || response.Vehicle.Status.Overall.DoorsLocked != "YES" {
+		t.Fatal("vehicle status was not decoded")
 	}
-	if *charging.Status.Battery.StateOfChargeInPercent != 75 {
-		t.Errorf("expected SoC 75, got %d", *charging.Status.Battery.StateOfChargeInPercent)
+	if response.Vehicle.Charging == nil || response.Vehicle.Charging.Status == nil {
+		t.Fatal("charging status was not decoded")
 	}
-	if *charging.Status.ChargePowerInKW != 11.0 {
-		t.Errorf("expected charge power 11.0, got %f", *charging.Status.ChargePowerInKW)
+	if response.Vehicle.Charging.Status.State == nil || *response.Vehicle.Charging.Status.State != ChargingStateCharging {
+		t.Errorf("charging state = %v", response.Vehicle.Charging.Status.State)
+	}
+	if response.Vehicle.Charging.Status.Battery == nil || *response.Vehicle.Charging.Status.Battery.StateOfChargeInPercent != 75 {
+		t.Fatal("battery state of charge was not decoded")
+	}
+	if response.Vehicle.AirConditioning == nil || response.Vehicle.AirConditioning.TargetTemperature == nil {
+		t.Fatal("air conditioning was not decoded")
+	}
+	if got := response.Vehicle.AirConditioning.TargetTemperature.Value; got != 21.5 {
+		t.Errorf("target temperature = %v", got)
+	}
+	if response.Vehicle.FuelStatus == nil || response.Vehicle.FuelStatus.PrimaryEngineRange == nil {
+		t.Fatal("fuel status was not decoded")
+	}
+	if got := *response.Vehicle.FuelStatus.PrimaryEngineRange.CurrentFuelLevelInPercent; got != 87 {
+		t.Errorf("fuel level = %v", got)
+	}
+	if response.Vehicle.Odometer == nil || response.Vehicle.Odometer.MileageInKm != 12753 {
+		t.Errorf("odometer = %#v", response.Vehicle.Odometer)
+	}
+	if response.Vehicle.ParkingPosition == nil || response.Vehicle.ParkingPosition.GpsCoordinates == nil {
+		t.Fatal("parking position was not decoded")
+	}
+	if got := response.Vehicle.ParkingPosition.GpsCoordinates.Latitude; got != 37.4224428 {
+		t.Errorf("latitude = %v", got)
+	}
+	if response.Vehicle.AuxiliaryHeating == nil || response.Vehicle.AuxiliaryHeating.DurationInSeconds == nil {
+		t.Fatal("auxiliary heating was not decoded")
+	}
+	if response.Vehicle.ActiveVentilation == nil || response.Vehicle.ActiveVentilation.DurationInSeconds == nil {
+		t.Fatal("active ventilation was not decoded")
+	}
+	if response.Vehicle.ChargingProfiles == nil || len(response.Vehicle.ChargingProfiles.Profiles) != 1 {
+		t.Fatal("charging profiles were not decoded")
+	}
+	profile := response.Vehicle.ChargingProfiles.Profiles[0]
+	if len(profile.PreferredChargingTimes) != 1 || len(profile.Timers) != 1 {
+		t.Errorf("charging profile = %#v", profile)
+	}
+	if response.Errors == nil || len(*response.Errors) != 1 || (*response.Errors)[0].Type != VehicleErrorRenderUnavailable {
+		t.Errorf("errors = %#v", response.Errors)
+	}
+	if response.Metadata.APIKeyExpiresAt != "2026-09-30T00:00:00Z" {
+		t.Errorf("API key expiry = %q", response.Metadata.APIKeyExpiresAt)
+	}
+	if response.Metadata.RateLimitRemaining != "19" {
+		t.Errorf("rate limit remaining = %q", response.Metadata.RateLimitRemaining)
 	}
 }
 
-func TestAirConditioning(t *testing.T) {
-	windowHeating := true
-
+func TestVehicleWithoutIncludes(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(AirConditioning{
-			State:                  AirConditioningStateOff,
-			ChargerConnectionState: ConnectionStateConnected,
-			ChargerLockState:       ChargerLockedStateLocked,
-			WindowHeatingEnabled:   &windowHeating,
-			TargetTemperature: &TargetTemperature{
-				TemperatureValue: 21.5,
-				UnitInCar:        "CELSIUS",
-			},
-		})
+		if r.URL.RawQuery != "" {
+			t.Errorf("query = %q, want empty", r.URL.RawQuery)
+		}
+		_, err := w.Write([]byte(`{"vehicle":{"vin":"TMBJB9NY6RF123456"},"errors":[]}`))
+		if err != nil {
+			t.Errorf("writing response: %v", err)
+		}
 	})
 	defer server.Close()
 
-	ac, err := client.AirConditioning(context.Background(), "TMBJB9NY6RF123456")
+	if _, err := client.Vehicle(context.Background(), testVIN); err != nil {
+		t.Fatalf("Vehicle() error = %v", err)
+	}
+}
+
+func TestVehicleValidatesRequest(t *testing.T) {
+	var requests atomic.Int32
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer server.Close()
+
+	tests := []struct {
+		name     string
+		vin      string
+		includes []Include
+		want     string
+	}{
+		{name: "short VIN", vin: "123", want: "17 characters"},
+		{name: "invalid include", vin: testVIN, includes: []Include{"unknown"}, want: "invalid vehicle include"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.Vehicle(context.Background(), tt.vin, tt.includes...)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Vehicle() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+	if got := requests.Load(); got != 0 {
+		t.Errorf("requests = %d, want 0", got)
+	}
+}
+
+func TestGuardRedirectsStripsAPIKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		from     string
+		to       string
+		wantKept bool
+	}{
+		{name: "same origin", from: "https://api.example.com/a", to: "https://api.example.com/b", wantKept: true},
+		{name: "other host", from: "https://api.example.com/a", to: "https://evil.example.net/a", wantKept: false},
+		{name: "scheme downgrade", from: "https://api.example.com/a", to: "http://api.example.com/a", wantKept: false},
+		{name: "other port", from: "https://api.example.com/a", to: "https://api.example.com:8443/a", wantKept: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			guarded := guardRedirects(&http.Client{})
+			original, err := http.NewRequest(http.MethodGet, tt.from, nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			redirect, err := http.NewRequest(http.MethodGet, tt.to, nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			redirect.Header.Set("X-API-Key", "test-api-key")
+
+			if err := guarded.CheckRedirect(redirect, []*http.Request{original}); err != http.ErrUseLastResponse {
+				t.Errorf("CheckRedirect() = %v, want ErrUseLastResponse", err)
+			}
+			if kept := redirect.Header.Get("X-API-Key") != ""; kept != tt.wantKept {
+				t.Errorf("API key kept = %v, want %v", kept, tt.wantKept)
+			}
+		})
+	}
+}
+
+func TestVehicleDoesNotLeakAPIKeyOnRedirect(t *testing.T) {
+	var leakedKey atomic.Value
+	leakedKey.Store("")
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leakedKey.Store(r.Header.Get("X-API-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"vehicle":{"vin":"TMBJB9NY6RF123456"}}`))
+	}))
+	defer elsewhere.Close()
+
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusFound)
+	})
+	defer server.Close()
+
+	_, err := client.Vehicle(context.Background(), testVIN)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Vehicle() error = %v, want *APIError", err)
+	}
+	if apiErr.StatusCode != http.StatusFound {
+		t.Errorf("status = %d, want %d (redirect must not be followed)", apiErr.StatusCode, http.StatusFound)
+	}
+	if got := leakedKey.Load().(string); got != "" {
+		t.Errorf("API key leaked to redirect target: %q", got)
+	}
+}
+
+func TestVehicleStripsAPIKeyWhenCallerFollowsRedirects(t *testing.T) {
+	var receivedKey atomic.Value
+	receivedKey.Store("unset")
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedKey.Store(r.Header.Get("X-API-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"vehicle":{"vin":"TMBJB9NY6RF123456"}}`))
+	}))
+	defer elsewhere.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer server.Close()
+
+	followRedirects := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { return nil },
+	}
+	client, err := NewClient("test-api-key", WithBaseURL(server.URL), WithHTTPClient(followRedirects))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("NewClient() error = %v", err)
 	}
-	if ac.State != AirConditioningStateOff {
-		t.Errorf("expected state OFF, got %s", ac.State)
+
+	if _, err := client.Vehicle(context.Background(), testVIN); err != nil {
+		t.Fatalf("Vehicle() error = %v", err)
 	}
-	if ac.ChargerConnectionState != ConnectionStateConnected {
-		t.Errorf("expected charger CONNECTED, got %s", ac.ChargerConnectionState)
+	if got := receivedKey.Load().(string); got != "" {
+		t.Errorf("API key leaked to redirect target: %q", got)
 	}
-	if ac.ChargerLockState != ChargerLockedStateLocked {
-		t.Errorf("expected charger LOCKED, got %s", ac.ChargerLockState)
+	if followRedirects.CheckRedirect == nil {
+		t.Error("caller-supplied HTTP client was mutated")
 	}
-	if ac.TargetTemperature == nil || ac.TargetTemperature.TemperatureValue != 21.5 {
-		t.Error("expected target temperature 21.5")
+}
+
+func TestVehicleRequiresAPIKey(t *testing.T) {
+	client, err := NewClient("")
+	if client != nil {
+		t.Errorf("NewClient() client = %#v, want nil", client)
+	}
+	if err == nil || !strings.Contains(err.Error(), "API key is required") {
+		t.Fatalf("NewClient() error = %v", err)
 	}
 }
 
 func TestAPIError(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"error":"forbidden"}`))
+		w.Header().Set("RateLimit-Limit", "20")
+		w.Header().Set("RateLimit-Remaining", "0")
+		w.Header().Set("RateLimit-Reset", "1800")
+		w.Header().Set("Retry-After", "1800")
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, err := w.Write([]byte(`{
+			"type":"https://public.api.connect.skoda-auto.cz/problems/rate-limit-exceeded",
+			"title":"Too Many Requests",
+			"status":429,
+			"detail":"The API rate limit has been exceeded.",
+			"instance":"/api/v1/vehicles/TMBJB9NY6RF123456"
+		}`))
+		if err != nil {
+			t.Errorf("writing response: %v", err)
+		}
 	})
 	defer server.Close()
 
-	_, err := client.Garage(context.Background())
+	_, err := client.Vehicle(context.Background(), testVIN)
 	if err == nil {
-		t.Fatal("expected error")
+		t.Fatal("Vehicle() error = nil")
 	}
-
-	errStr := err.Error()
-	if !strings.Contains(errStr, "403") {
-		t.Errorf("expected error to contain 403, got: %s", errStr)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *APIError", err)
 	}
-}
-
-func TestIsTokenExpired(t *testing.T) {
-	validToken := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjk5OTk5OTk5OTl9."
-	if isTokenExpired(validToken) {
-		t.Error("expected token to NOT be expired")
+	if apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status = %d", apiErr.StatusCode)
 	}
-
-	expiredToken := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjB9."
-	if !isTokenExpired(expiredToken) {
-		t.Error("expected token to be expired")
+	if apiErr.Problem == nil || apiErr.Problem.Type == nil || !strings.HasSuffix(*apiErr.Problem.Type, "/rate-limit-exceeded") {
+		t.Errorf("problem = %#v", apiErr.Problem)
 	}
-
-	if !isTokenExpired("not-a-jwt") {
-		t.Error("expected invalid token to be treated as expired")
+	if apiErr.Metadata.RetryAfter != "1800" {
+		t.Errorf("retry after = %q", apiErr.Metadata.RetryAfter)
+	}
+	if !strings.Contains(err.Error(), "API rate limit has been exceeded") {
+		t.Errorf("error = %q", err)
 	}
 }
 
-func TestTokenRefresh(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/authentication/refresh-token") {
-			json.NewEncoder(w).Encode(IDKSession{
-				AccessToken:  "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjk5OTk5OTk5OTl9.",
-				RefreshToken: "new-refresh-token",
-				IDToken:      "new-id-token",
-			})
-			return
+func TestConvenienceReads(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("include") {
+		case "charging":
+			_, err := w.Write([]byte(`{"vehicle":{"vin":"TMBJB9NY6RF123456","charging":{"isVehicleInSavedLocation":false,"status":{"state":"READY_FOR_CHARGING"}}}}`))
+			if err != nil {
+				t.Errorf("writing charging response: %v", err)
+			}
+		case "airConditioning":
+			_, err := w.Write([]byte(`{"vehicle":{"vin":"TMBJB9NY6RF123456","airConditioning":{"state":"OFF"}}}`))
+			if err != nil {
+				t.Errorf("writing air-conditioning response: %v", err)
+			}
+		default:
+			t.Errorf("unexpected include %q", r.URL.Query().Get("include"))
 		}
-		if strings.Contains(r.URL.Path, "/v2/garage") {
-			json.NewEncoder(w).Encode(garageResponse{Vehicles: []GarageEntry{}})
-			return
-		}
-		w.WriteHeader(404)
-	}))
+	})
 	defer server.Close()
 
-	client := NewClient()
-	client.apiURL = server.URL
-	client.baseURL = server.URL
-	client.tokens = &IDKSession{
-		AccessToken:  "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjB9.",
-		RefreshToken: "old-refresh-token",
-		IDToken:      "old-id-token",
-	}
-
-	_, err := client.Garage(context.Background())
+	charging, err := client.Charging(context.Background(), testVIN)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("Charging() error = %v", err)
+	}
+	if charging.Status == nil || charging.Status.State == nil || *charging.Status.State != ChargingStateReadyForCharging {
+		t.Errorf("charging = %#v", charging)
 	}
 
-	if client.tokens.RefreshToken != "new-refresh-token" {
-		t.Errorf("expected refresh token to be updated, got %s", client.tokens.RefreshToken)
-	}
-}
-
-func TestCSRFParsing(t *testing.T) {
-	html := `<html><head><script>
-window._IDK = {
-    csrf_token: 'csrf-token-123',
-    templateModel: {"hmac":"hmac-789","relayState":"relay-state-456"},
-    csrf_parameterName: '_csrf',
-}
-</script></head></html>`
-
-	csrf, err := parseCSRF(html)
+	airConditioning, err := client.AirConditioning(context.Background(), testVIN)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("AirConditioning() error = %v", err)
 	}
-	if csrf.csrf != "csrf-token-123" {
-		t.Errorf("expected csrf 'csrf-token-123', got '%s'", csrf.csrf)
-	}
-	if csrf.relayState != "relay-state-456" {
-		t.Errorf("expected relayState 'relay-state-456', got '%s'", csrf.relayState)
-	}
-	if csrf.hmac != "hmac-789" {
-		t.Errorf("expected hmac 'hmac-789', got '%s'", csrf.hmac)
+	if airConditioning.State != AirConditioningStateOff {
+		t.Errorf("air conditioning state = %q", airConditioning.State)
 	}
 }
 
-func TestPKCEChallenge(t *testing.T) {
-	verifier := "test-verifier-string"
-	c1 := pkceChallenge(verifier)
-	c2 := pkceChallenge(verifier)
-	if c1 != c2 {
-		t.Error("expected same challenge for same verifier")
+func TestConvenienceReadReportsPartialDataError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, err := w.Write([]byte(`{
+			"vehicle":{"vin":"TMBJB9NY6RF123456"},
+			"errors":[{"type":"CHARGING_UNSUPPORTED","description":"Charging is not supported."}]
+		}`))
+		if err != nil {
+			t.Errorf("writing response: %v", err)
+		}
+	})
+	defer server.Close()
+
+	_, err := client.Charging(context.Background(), testVIN)
+	var dataErr *VehicleDataError
+	if !errors.As(err, &dataErr) {
+		t.Fatalf("Charging() error = %v, want *VehicleDataError", err)
 	}
-	if c1 == "" {
-		t.Error("expected non-empty challenge")
+	if dataErr.Include != IncludeCharging || len(dataErr.Errors) != 1 {
+		t.Errorf("data error = %#v", dataErr)
 	}
 }

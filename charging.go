@@ -2,80 +2,78 @@ package skoda
 
 import (
 	"context"
-	"fmt"
-	"time"
-)
 
-// ChargingState represents the current state of charging.
-type ChargingState string
+	"github.com/jlandersen/go-skoda/internal/api"
+)
 
 const (
-	ChargingStateReadyForCharging    ChargingState = "READY_FOR_CHARGING"
-	ChargingStateConnectCable        ChargingState = "CONNECT_CABLE"
-	ChargingStateConserving          ChargingState = "CONSERVING"
-	ChargingStateCharging            ChargingState = "CHARGING"
-	ChargingStateChargingInterrupted ChargingState = "CHARGING_INTERRUPTED"
-	ChargingStateError               ChargingState = "ERROR"
+	ChargingStateReadyForCharging    = "READY_FOR_CHARGING"
+	ChargingStateConnectCable        = "CONNECT_CABLE"
+	ChargingStateConserving          = "CONSERVING"
+	ChargingStateCharging            = "CHARGING"
+	ChargingStateDischarging         = "DISCHARGING"
+	ChargingStateChargingInterrupted = "CHARGING_INTERRUPTED"
+	ChargeTypeAC                     = "AC"
+	ChargeTypeDC                     = "DC"
+	ChargeTypeOff                    = "OFF"
+	ChargingTimerTypeOneOff          = "ONE_OFF"
+	ChargingTimerTypeRecurring       = "RECURRING"
+	Monday                           = "MONDAY"
+	Tuesday                          = "TUESDAY"
+	Wednesday                        = "WEDNESDAY"
+	Thursday                         = "THURSDAY"
+	Friday                           = "FRIDAY"
+	Saturday                         = "SATURDAY"
+	Sunday                           = "SUNDAY"
 )
 
-// ChargeType represents the type of charging connection.
-type ChargeType string
-
-const (
-	ChargeTypeAC  ChargeType = "AC"
-	ChargeTypeDC  ChargeType = "DC"
-	ChargeTypeOff ChargeType = "OFF"
-)
-
-// MaxChargeCurrent represents the maximum charge current setting.
-type MaxChargeCurrent string
-
-const (
-	MaxChargeCurrentMaximum MaxChargeCurrent = "MAXIMUM"
-	MaxChargeCurrentReduced MaxChargeCurrent = "REDUCED"
-)
-
-// ChargingBattery contains the current battery state.
-type ChargingBattery struct {
-	StateOfChargeInPercent         *int   `json:"stateOfChargeInPercent"`
-	RemainingCruisingRangeInMeters *int64 `json:"remainingCruisingRangeInMeters"`
-}
+// ChargingBattery contains the current high-voltage battery state.
+type ChargingBattery = api.BatteryStatus
 
 // ChargingStatus contains the current charging status.
-type ChargingStatus struct {
-	Battery                              ChargingBattery `json:"battery"`
-	State                                ChargingState   `json:"state,omitempty"`
-	ChargePowerInKW                      *float64        `json:"chargePowerInKw,omitempty"`
-	ChargingRateInKilometersPerHour      *float64        `json:"chargingRateInKilometersPerHour,omitempty"`
-	ChargeType                           ChargeType      `json:"chargeType,omitempty"`
-	RemainingTimeToFullyChargedInMinutes *int64          `json:"remainingTimeToFullyChargedInMinutes,omitempty"`
-}
+type ChargingStatus = api.ChargingStatus
 
-// ChargingSettings contains the charging configuration.
-type ChargingSettings struct {
-	AutoUnlockPlugWhenCharged    string `json:"autoUnlockPlugWhenCharged,omitempty"`
-	MaxChargeCurrentAC           string `json:"maxChargeCurrentAc,omitempty"`
-	TargetStateOfChargeInPercent *int   `json:"targetStateOfChargeInPercent,omitempty"`
-	PreferredChargeMode          string `json:"preferredChargeMode,omitempty"`
-	ChargingCareMode             string `json:"chargingCareMode,omitempty"`
-	BatterySupport               string `json:"batterySupport,omitempty"`
-}
+// ChargingSettings contains the vehicle's charging configuration.
+type ChargingSettings = api.ChargingSettings
 
-// Charging contains the full charging information for a vehicle.
-type Charging struct {
-	IsVehicleInSavedLocation bool             `json:"isVehicleInSavedLocation"`
-	Status                   *ChargingStatus  `json:"status,omitempty"`
-	Settings                 ChargingSettings `json:"settings"`
-	CarCapturedTimestamp     *time.Time       `json:"carCapturedTimestamp,omitempty"`
-}
+// Charging contains charging and battery status for a vehicle.
+type Charging = api.Charging
 
-// Charging retrieves the current charging state for a vehicle.
-// This is a safe read-only endpoint that does not wake the car.
+// ChargingProfiles contains all saved charging locations for a vehicle.
+type ChargingProfiles = api.ChargingProfiles
+
+// ChargingProfile contains a saved charging location and its schedule.
+type ChargingProfile = api.ChargingProfile
+
+// ChargingProfileSettings contains settings for a saved charging location.
+type ChargingProfileSettings = api.ChargingProfileSettings
+
+// MinBatteryStateOfCharge configures immediate charging below a threshold.
+type MinBatteryStateOfCharge = api.MinBatteryStateOfCharge
+
+// ChargingTime describes a preferred charging time window.
+type ChargingTime = api.ChargingTime
+
+// ChargingTimer describes a one-off or recurring charging timer.
+type ChargingTimer = api.Timer
+
+// ChargingTimerOneOffDay is the weekday of a one-off charging timer.
+type ChargingTimerOneOffDay = api.TimerOneOffDay
+
+// ChargingTimerRecurringDay is a weekday a recurring charging timer repeats on.
+type ChargingTimerRecurringDay = api.TimerRecurringOn
+
+// CurrentVehiclePositionProfile identifies the saved location containing the vehicle.
+type CurrentVehiclePositionProfile = api.CurrentVehiclePositionProfile
+
+// Charging retrieves only the charging section for a vehicle.
 func (c *Client) Charging(ctx context.Context, vin string) (*Charging, error) {
-	var res Charging
-	url := fmt.Sprintf("%s/v1/charging/%s", c.apiURL, vin)
-	if err := c.doGet(ctx, url, &res); err != nil {
-		return nil, fmt.Errorf("charging: %w", err)
+	response, err := c.Vehicle(ctx, vin, IncludeCharging)
+	if err != nil {
+		return nil, err
 	}
-	return &res, nil
+	if response.Vehicle.Charging == nil {
+		return nil, &VehicleDataError{Include: IncludeCharging, Errors: vehicleErrors(response)}
+	}
+	return response.Vehicle.Charging, nil
 }

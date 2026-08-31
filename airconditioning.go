@@ -2,78 +2,50 @@ package skoda
 
 import (
 	"context"
-	"fmt"
-	"time"
-)
 
-// AirConditioningState represents the state of the air conditioning.
-type AirConditioningState string
+	"github.com/jlandersen/go-skoda/internal/api"
+)
 
 const (
-	AirConditioningStateCooling          AirConditioningState = "COOLING"
-	AirConditioningStateHeating          AirConditioningState = "HEATING"
-	AirConditioningStateHeatingAuxiliary AirConditioningState = "HEATING_AUXILIARY"
-	AirConditioningStateOff              AirConditioningState = "OFF"
-	AirConditioningStateOn               AirConditioningState = "ON"
-	AirConditioningStateVentilation      AirConditioningState = "VENTILATION"
+	AirConditioningStateCooling          = "COOLING"
+	AirConditioningStateHeating          = "HEATING"
+	AirConditioningStateHeatingAuxiliary = "HEATING_AUXILIARY"
+	AirConditioningStateOff              = "OFF"
+	AirConditioningStateVentilation      = "VENTILATION"
+	AirConditioningStateCompleted        = "COMPLETED"
+	AirConditioningStateUnknown          = "UNKNOWN"
+	AirConditioningStateUnsupported      = "UNSUPPORTED"
+	// AuxiliaryHeatingStatePreheating and ActiveVentilationStatePreheating are
+	// reported by the auxiliary heater and active ventilation only.
+	AuxiliaryHeatingStatePreheating      = "PREHEATING"
+	ActiveVentilationStatePreheating     = "PREHEATING"
+	AuxiliaryHeatingStartModeHeating     = "HEATING"
+	AuxiliaryHeatingStartModeVentilation = "VENTILATION"
 )
 
-// ConnectionState represents whether the charger is connected.
-type ConnectionState string
+// TargetTemperature contains a cabin temperature and its unit.
+type TargetTemperature = api.TargetTemperature
 
-const (
-	ConnectionStateConnected    ConnectionState = "CONNECTED"
-	ConnectionStateDisconnected ConnectionState = "DISCONNECTED"
-)
+// WindowHeating contains the electric window-heating state.
+type WindowHeating = api.WindowHeating
 
-// ChargerLockedState represents the lock state of the charger.
-type ChargerLockedState string
+// AirConditioning contains the air-conditioning state and settings.
+type AirConditioning = api.AirConditioning
 
-const (
-	ChargerLockedStateLocked   ChargerLockedState = "LOCKED"
-	ChargerLockedStateUnlocked ChargerLockedState = "UNLOCKED"
-	ChargerLockedStateInvalid  ChargerLockedState = "INVALID"
-)
+// AuxiliaryHeating contains the auxiliary heater state and settings.
+type AuxiliaryHeating = api.AuxiliaryHeating
 
-// WindowHeatingState describes the state of front/rear window heating.
-type WindowHeatingState struct {
-	Front string `json:"front"`
-	Rear  string `json:"rear"`
-}
+// ActiveVentilation contains the active ventilation state and duration.
+type ActiveVentilation = api.ActiveVentilation
 
-// TargetTemperature describes the target temperature setting.
-type TargetTemperature struct {
-	TemperatureValue float64 `json:"temperatureValue"`
-	UnitInCar        string  `json:"unitInCar"`
-}
-
-// SeatHeating describes seat heating state.
-type SeatHeating struct {
-	FrontLeft  *bool `json:"frontLeft,omitempty"`
-	FrontRight *bool `json:"frontRight,omitempty"`
-}
-
-// AirConditioning contains the air conditioning state for a vehicle.
-type AirConditioning struct {
-	State                  AirConditioningState `json:"state"`
-	ChargerConnectionState ConnectionState      `json:"chargerConnectionState,omitempty"`
-	ChargerLockState       ChargerLockedState   `json:"chargerLockState,omitempty"`
-	WindowHeatingState     *WindowHeatingState  `json:"windowHeatingState,omitempty"`
-	TargetTemperature      *TargetTemperature   `json:"targetTemperature,omitempty"`
-	SeatHeatingActivated   *SeatHeating         `json:"seatHeatingActivated,omitempty"`
-	HeaterSource           string               `json:"heaterSource,omitempty"`
-	WindowHeatingEnabled   *bool                `json:"windowHeatingEnabled,omitempty"`
-	CarCapturedTimestamp   *time.Time           `json:"carCapturedTimestamp,omitempty"`
-	SteeringWheelPosition  string               `json:"steeringWheelPosition,omitempty"`
-}
-
-// AirConditioning retrieves the current air conditioning state for a vehicle.
-// This is a safe read-only endpoint that does not wake the car.
+// AirConditioning retrieves only the air-conditioning section for a vehicle.
 func (c *Client) AirConditioning(ctx context.Context, vin string) (*AirConditioning, error) {
-	var res AirConditioning
-	url := fmt.Sprintf("%s/v2/air-conditioning/%s", c.apiURL, vin)
-	if err := c.doGet(ctx, url, &res); err != nil {
-		return nil, fmt.Errorf("air conditioning: %w", err)
+	response, err := c.Vehicle(ctx, vin, IncludeAirConditioning)
+	if err != nil {
+		return nil, err
 	}
-	return &res, nil
+	if response.Vehicle.AirConditioning == nil {
+		return nil, &VehicleDataError{Include: IncludeAirConditioning, Errors: vehicleErrors(response)}
+	}
+	return response.Vehicle.AirConditioning, nil
 }

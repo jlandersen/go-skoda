@@ -3,182 +3,144 @@ package skoda
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/jlandersen/go-skoda/internal/api"
 )
 
-// RenderType describes how the vehicle image was generated.
-type RenderType string
+// Include identifies a part of the vehicle response.
+type Include = api.GetVehicleParamsInclude
 
 const (
-	RenderTypeReal RenderType = "REAL"
+	IncludeInfo              = api.GetVehicleParamsIncludeInfo
+	IncludeStatus            = api.GetVehicleParamsIncludeStatus
+	IncludeFuelStatus        = api.GetVehicleParamsIncludeFuelStatus
+	IncludeOdometer          = api.GetVehicleParamsIncludeOdometer
+	IncludeParkingPosition   = api.GetVehicleParamsIncludeParkingPosition
+	IncludeAirConditioning   = api.GetVehicleParamsIncludeAirConditioning
+	IncludeAuxiliaryHeating  = api.GetVehicleParamsIncludeAuxiliaryHeating
+	IncludeActiveVentilation = api.GetVehicleParamsIncludeActiveVentilation
+	IncludeCharging          = api.GetVehicleParamsIncludeCharging
+	IncludeChargingProfiles  = api.GetVehicleParamsIncludeChargingProfiles
 )
 
-// ViewType identifies the type of composite render.
-type ViewType string
+// Vehicle contains the vehicle and the state sections requested from the API.
+type Vehicle = api.Vehicle
+
+// VehicleStatus contains the aggregated and detailed state of doors, windows, and lights.
+type VehicleStatus = api.VehicleStatus
+
+// OverallVehicleStatus contains aggregated door, window, lock, and light states.
+type OverallVehicleStatus = api.OverallVehicleStatusDto
+
+// VehicleStatusDetail contains individual body-opening states.
+type VehicleStatusDetail = api.VehicleStatusDetailDto
+
+// EngineRange contains fuel, charge, and range values for one engine.
+type EngineRange = api.EngineRange
+
+// FuelStatus contains fuel and range data for a combustion or hybrid vehicle.
+type FuelStatus = api.FuelStatus
+
+// Odometer contains the vehicle mileage.
+type Odometer = api.Odometer
+
+// GPSCoordinates contains latitude and longitude in decimal degrees.
+type GPSCoordinates = api.ParkingPositionGpsCoordinates
+
+// ParkingPosition contains the vehicle's last known parking position.
+type ParkingPosition = api.ParkingPosition
+
+// VehicleError describes a response section that could not be returned.
+type VehicleError = api.VehicleError
 
 const (
-	ViewTypeUnmodifiedExteriorSide  ViewType = "UNMODIFIED_EXTERIOR_SIDE"
-	ViewTypeUnmodifiedExteriorFront ViewType = "UNMODIFIED_EXTERIOR_FRONT"
-	ViewTypeHome                    ViewType = "HOME"
-	ViewTypeChargingLight           ViewType = "CHARGING_LIGHT"
-	ViewTypeChargingDark            ViewType = "CHARGING_DARK"
-	ViewTypePluggedInDark           ViewType = "PLUGGED_IN_DARK"
-	ViewTypePluggedInLight          ViewType = "PLUGGED_IN_LIGHT"
+	VehicleErrorRenderUnavailable            = "RENDER_UNAVAILABLE"
+	VehicleErrorStatusUnsupported            = "VEHICLE_STATUS_UNSUPPORTED"
+	VehicleErrorStatusDisabled               = "VEHICLE_STATUS_DISABLED"
+	VehicleErrorStatusUnavailable            = "VEHICLE_STATUS_UNAVAILABLE"
+	VehicleErrorFuelStatusUnsupported        = "FUEL_STATUS_UNSUPPORTED"
+	VehicleErrorFuelStatusDisabled           = "FUEL_STATUS_DISABLED"
+	VehicleErrorFuelStatusUnavailable        = "FUEL_STATUS_UNAVAILABLE"
+	VehicleErrorOdometerUnsupported          = "ODOMETER_UNSUPPORTED"
+	VehicleErrorOdometerDisabled             = "ODOMETER_DISABLED"
+	VehicleErrorOdometerUnavailable          = "ODOMETER_UNAVAILABLE"
+	VehicleErrorParkingPositionUnsupported   = "PARKING_POSITION_UNSUPPORTED"
+	VehicleErrorParkingPositionDisabled      = "PARKING_POSITION_DISABLED"
+	VehicleErrorParkingPositionUnavailable   = "PARKING_POSITION_UNAVAILABLE"
+	VehicleErrorAirConditioningUnsupported   = "AIR_CONDITIONING_UNSUPPORTED"
+	VehicleErrorAirConditioningDisabled      = "AIR_CONDITIONING_DISABLED"
+	VehicleErrorAirConditioningUnavailable   = "AIR_CONDITIONING_UNAVAILABLE"
+	VehicleErrorAuxiliaryHeatingUnsupported  = "AUXILIARY_HEATING_UNSUPPORTED"
+	VehicleErrorAuxiliaryHeatingDisabled     = "AUXILIARY_HEATING_DISABLED"
+	VehicleErrorAuxiliaryHeatingUnavailable  = "AUXILIARY_HEATING_UNAVAILABLE"
+	VehicleErrorActiveVentilationUnsupported = "ACTIVE_VENTILATION_UNSUPPORTED"
+	VehicleErrorActiveVentilationDisabled    = "ACTIVE_VENTILATION_DISABLED"
+	VehicleErrorActiveVentilationUnavailable = "ACTIVE_VENTILATION_UNAVAILABLE"
+	VehicleErrorChargingUnsupported          = "CHARGING_UNSUPPORTED"
+	VehicleErrorChargingDisabled             = "CHARGING_DISABLED"
+	VehicleErrorChargingUnavailable          = "CHARGING_UNAVAILABLE"
+	VehicleErrorChargingProfilesUnsupported  = "CHARGING_PROFILES_UNSUPPORTED"
+	VehicleErrorChargingProfilesDisabled     = "CHARGING_PROFILES_DISABLED"
+	VehicleErrorChargingProfilesUnavailable  = "CHARGING_PROFILES_UNAVAILABLE"
 )
 
-// Render is a single vehicle image with a URL and viewpoint.
-type Render struct {
-	URL       string     `json:"url"`
-	Type      RenderType `json:"type"`
-	Order     int        `json:"order"`
-	ViewPoint string     `json:"viewPoint"`
+// VehicleData contains the vehicle and the partial-data errors returned with it.
+type VehicleData = api.VehicleResponse
+
+// VehicleResponse contains generated vehicle data, partial-data errors, and response metadata.
+type VehicleResponse struct {
+	VehicleData
+	Metadata ResponseMetadata `json:"-"`
 }
 
-// CompositeRender is a set of layered renders for a specific view type.
-type CompositeRender struct {
-	ViewType ViewType `json:"viewType"`
-	Layers   []Render `json:"layers"`
+// VehicleDataError indicates that a requested response section was omitted.
+type VehicleDataError struct {
+	Include Include
+	Errors  []VehicleError
 }
 
-// CapabilityID identifies a vehicle capability.
-type CapabilityID string
-
-const (
-	CapabilityAccess                      CapabilityID = "ACCESS"
-	CapabilityAirConditioning             CapabilityID = "AIR_CONDITIONING"
-	CapabilityAuxiliaryHeating            CapabilityID = "AUXILIARY_HEATING"
-	CapabilityCharging                    CapabilityID = "CHARGING"
-	CapabilityChargingMEB                 CapabilityID = "CHARGING_MEB"
-	CapabilityChargingMQB                 CapabilityID = "CHARGING_MQB"
-	CapabilityChargingProfiles            CapabilityID = "CHARGING_PROFILES"
-	CapabilityDepartureTimers             CapabilityID = "DEPARTURE_TIMERS"
-	CapabilityFuelStatus                  CapabilityID = "FUEL_STATUS"
-	CapabilityHonkAndFlash                CapabilityID = "HONK_AND_FLASH"
-	CapabilityParkingPosition             CapabilityID = "PARKING_POSITION"
-	CapabilityState                       CapabilityID = "STATE"
-	CapabilityTripStatistics              CapabilityID = "TRIP_STATISTICS"
-	CapabilityVehicleHealthInspection     CapabilityID = "VEHICLE_HEALTH_INSPECTION"
-	CapabilityVehicleHealthWarnings       CapabilityID = "VEHICLE_HEALTH_WARNINGS"
-	CapabilityVehicleHealthWarningsWakeUp CapabilityID = "VEHICLE_HEALTH_WARNINGS_WITH_WAKE_UP"
-	CapabilityVehicleWakeUp               CapabilityID = "VEHICLE_WAKE_UP"
-	CapabilityVehicleWakeUpTrigger        CapabilityID = "VEHICLE_WAKE_UP_TRIGGER"
-	CapabilityPredictiveWakeUp            CapabilityID = "PREDICTIVE_WAKE_UP"
-	CapabilityWindowHeating               CapabilityID = "WINDOW_HEATING"
-)
-
-// Capability represents a single vehicle capability and its status.
-type Capability struct {
-	ID       CapabilityID `json:"id"`
-	Statuses []string     `json:"statuses"`
+func (e *VehicleDataError) Error() string {
+	if len(e.Errors) == 0 {
+		return fmt.Sprintf("skoda public API: %s data was omitted", e.Include)
+	}
+	return fmt.Sprintf("skoda public API: %s data was omitted: %s", e.Include, e.Errors[0].Type)
 }
 
-// IsAvailable returns true if the capability has no error statuses,
-// meaning it can currently be used.
-func (cap Capability) IsAvailable() bool {
-	return len(cap.Statuses) == 0
-}
-
-// Engine describes the vehicle's engine.
-type Engine struct {
-	Type             string  `json:"type"`
-	PowerInKW        int     `json:"powerInKW"`
-	CapacityInLiters float64 `json:"capacityInLiters,omitempty"`
-}
-
-// Battery describes the vehicle's traction battery.
-type Battery struct {
-	CapacityInKWh int `json:"capacityInKWh"`
-}
-
-// Gearbox describes the vehicle's gearbox.
-type Gearbox struct {
-	Type string `json:"type"`
-}
-
-// Specification describes the physical features of the vehicle.
-type Specification struct {
-	Title                string   `json:"title"`
-	Model                string   `json:"model"`
-	ModelYear            string   `json:"modelYear"`
-	Body                 string   `json:"body"`
-	SystemCode           string   `json:"systemCode"`
-	SystemModelID        string   `json:"systemModelId"`
-	Engine               Engine   `json:"engine"`
-	Battery              *Battery `json:"battery,omitempty"`
-	Gearbox              Gearbox  `json:"gearbox"`
-	TrimLevel            string   `json:"trimLevel,omitempty"`
-	ManufacturingDate    string   `json:"manufacturingDate"`
-	MaxChargingPowerInKW int      `json:"maxChargingPowerInKW,omitempty"`
-}
-
-// Capabilities holds the list of capabilities for a vehicle.
-type Capabilities struct {
-	Capabilities []Capability `json:"capabilities"`
-}
-
-// VehicleInfo contains detailed information about a specific vehicle.
-type VehicleInfo struct {
-	VIN                 string            `json:"vin"`
-	Name                string            `json:"name"`
-	State               string            `json:"state"`
-	Specification       Specification     `json:"specification"`
-	Capabilities        Capabilities      `json:"capabilities"`
-	Renders             []Render          `json:"renders"`
-	CompositeRenders    []CompositeRender `json:"compositeRenders"`
-	DevicePlatform      string            `json:"devicePlatform"`
-	WorkshopModeEnabled bool              `json:"workshopModeEnabled"`
-	SoftwareVersion     string            `json:"softwareVersion,omitempty"`
-	LicensePlate        string            `json:"licensePlate,omitempty"`
-}
-
-// HasCapability checks whether the vehicle has a given capability,
-// regardless of whether it's currently available.
-func (v *VehicleInfo) HasCapability(id CapabilityID) bool {
-	for _, cap := range v.Capabilities.Capabilities {
-		if cap.ID == id {
-			return true
+// Vehicle returns vehicle information and selected state sections for a VIN.
+// Omitting includes requests every section supported by the vehicle.
+func (c *Client) Vehicle(ctx context.Context, vin string, includes ...Include) (*VehicleResponse, error) {
+	if len(vin) != 17 {
+		return nil, fmt.Errorf("VIN must contain exactly 17 characters")
+	}
+	for _, include := range includes {
+		if !include.Valid() {
+			return nil, fmt.Errorf("invalid vehicle include %q", include)
 		}
 	}
-	return false
-}
 
-// IsCapabilityAvailable checks whether the vehicle has the capability
-// and it is currently available (no error statuses).
-func (v *VehicleInfo) IsCapabilityAvailable(id CapabilityID) bool {
-	for _, cap := range v.Capabilities.Capabilities {
-		if cap.ID == id {
-			return cap.IsAvailable()
+	requestURL := fmt.Sprintf("%s/api/v1/vehicles/%s", c.baseURL, url.PathEscape(vin))
+	if len(includes) > 0 {
+		includeValues := make([]string, len(includes))
+		for i, include := range includes {
+			includeValues[i] = string(include)
 		}
+		query := url.Values{"include": {strings.Join(includeValues, ",")}}
+		requestURL += "?" + query.Encode()
 	}
-	return false
+
+	var body api.VehicleResponse
+	metadata, err := c.doGet(ctx, requestURL, &body)
+	if err != nil {
+		return nil, fmt.Errorf("getting vehicle: %w", err)
+	}
+	return &VehicleResponse{VehicleData: body, Metadata: metadata}, nil
 }
 
-// RenderByViewPoint returns the first render matching the given viewpoint, or nil.
-func (v *VehicleInfo) RenderByViewPoint(viewPoint string) *Render {
-	for _, r := range v.Renders {
-		if r.ViewPoint == viewPoint {
-			return &r
-		}
+func vehicleErrors(response *VehicleResponse) []VehicleError {
+	if response.Errors == nil {
+		return nil
 	}
-	return nil
-}
-
-// CompositeRenderByViewType returns the first composite render matching the given view type, or nil.
-func (v *VehicleInfo) CompositeRenderByViewType(viewType ViewType) *CompositeRender {
-	for _, cr := range v.CompositeRenders {
-		if cr.ViewType == viewType {
-			return &cr
-		}
-	}
-	return nil
-}
-
-// VehicleInfo retrieves detailed information for a vehicle by VIN,
-// including capabilities and specification.
-func (c *Client) VehicleInfo(ctx context.Context, vin string) (*VehicleInfo, error) {
-	var res VehicleInfo
-	url := fmt.Sprintf("%s/v2/garage/vehicles/%s?%s", c.apiURL, vin, AllGenerations)
-	if err := c.doGet(ctx, url, &res); err != nil {
-		return nil, fmt.Errorf("vehicle info: %w", err)
-	}
-	return &res, nil
+	return *response.Errors
 }
